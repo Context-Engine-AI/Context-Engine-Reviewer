@@ -16,11 +16,14 @@ export class Config {
   public maxCodeblockLines: number; // cap lines inside fenced code blocks in comments
   public maxReviewChars: number; // cap total characters of diffs per LLM call
   public zaiBaseUrl: string | undefined;
+  public kimiBaseUrl: string | undefined;
+  public deepseekBaseUrl: string | undefined;
   public contextEngineApiKey: string | undefined;
   public contextEngineMcpUrl: string | undefined;
   public contextEngineCollection: string | undefined;
   public contextEngineTools: string[] | undefined;
   public contextEngineMaxTools: number;
+  public contextEngineMaxSteps: number; // max LLM steps (tool roundtrips + final output) per review batch
 
   constructor() {
     this.githubToken = process.env.GITHUB_TOKEN;
@@ -40,7 +43,13 @@ export class Config {
     }
 
     const isZaiModel = /^glm-/i.test(this.llmModel || "");
-    this.llmApiKey = process.env.LLM_API_KEY || (isZaiModel ? process.env.ZAI_API_KEY : undefined);
+    const isKimiModel = /^(kimi-|moonshot-)/i.test(this.llmModel || "");
+    const isDeepSeekModel = /^deepseek-/i.test(this.llmModel || "");
+    this.llmApiKey =
+      process.env.LLM_API_KEY ||
+      (isZaiModel ? process.env.ZAI_API_KEY : undefined) ||
+      (isKimiModel ? process.env.KIMI_API_KEY : undefined) ||
+      (isDeepSeekModel ? process.env.DEEPSEEK_API_KEY : undefined);
     const isBedrockWithAwsCreds = this.llmModel?.includes('qwen.') ||
                                    this.llmModel?.includes('anthropic.') ||
                                    this.llmModel?.includes('meta.') ||
@@ -49,7 +58,10 @@ export class Config {
 
     // AWS Bedrock with IAM credentials does not require an LLM API key.
     if (!this.llmApiKey && !(isBedrockWithAwsCreds && hasAwsCredentials)) {
-      throw new Error(isZaiModel ? "LLM_API_KEY or ZAI_API_KEY is not set" : "LLM_API_KEY is not set");
+      if (isZaiModel) throw new Error("LLM_API_KEY or ZAI_API_KEY is not set");
+      if (isKimiModel) throw new Error("LLM_API_KEY or KIMI_API_KEY is not set");
+      if (isDeepSeekModel) throw new Error("LLM_API_KEY or DEEPSEEK_API_KEY is not set");
+      throw new Error("LLM_API_KEY is not set");
     }
 
     // GitHub Enterprise Server support
@@ -59,6 +71,8 @@ export class Config {
       process.env.GITHUB_SERVER_URL || getInput('github_server_url') || 'https://github.com';
 
     this.zaiBaseUrl = process.env.ZAI_BASE_URL || getInput('zai_base_url') || undefined;
+    this.kimiBaseUrl = process.env.KIMI_BASE_URL || getInput('kimi_base_url') || undefined;
+    this.deepseekBaseUrl = process.env.DEEPSEEK_BASE_URL || getInput('deepseek_base_url') || undefined;
 
     this.contextEngineApiKey =
       process.env.CONTEXT_ENGINE_API_KEY ||
@@ -79,7 +93,11 @@ export class Config {
       .filter(Boolean);
     const ceMaxToolsRaw = process.env.CONTEXT_ENGINE_MAX_TOOLS || getInput('context_engine_max_tools');
     const parsedCeMaxTools = ceMaxToolsRaw && parseInt(ceMaxToolsRaw, 10);
-    this.contextEngineMaxTools = Number.isFinite(parsedCeMaxTools as any) && (parsedCeMaxTools as any)! > 0 ? (parsedCeMaxTools as any) : 9;
+    this.contextEngineMaxTools = Number.isFinite(parsedCeMaxTools as any) && (parsedCeMaxTools as any)! > 0 ? (parsedCeMaxTools as any) : 10;
+
+    const ceMaxStepsRaw = process.env.CONTEXT_ENGINE_MAX_STEPS || getInput('context_engine_max_steps');
+    const parsedCeMaxSteps = ceMaxStepsRaw && parseInt(ceMaxStepsRaw, 10);
+    this.contextEngineMaxSteps = Number.isFinite(parsedCeMaxSteps as any) && (parsedCeMaxSteps as any)! > 0 ? (parsedCeMaxSteps as any) : 8;
 
     // Custom review mode: 'on' | 'off' | 'auto' (default)
     this.customMode = (
@@ -99,7 +117,7 @@ export class Config {
 
     // Reviewer caps (configurable)
     const maxCommentsEnv = process.env.REVIEW_MAX_COMMENTS || getInput('max_comments');
-    const parsedMax = maxCommentsEnv && parseInt(maxCommentsEnv, 20);
+    const parsedMax = maxCommentsEnv && parseInt(maxCommentsEnv, 10);
     this.maxComments = Number.isFinite(parsedMax as any) && (parsedMax as any)! > 0 ? (parsedMax as any) : 40;
 
     const maxCodeblockLinesEnv = process.env.REVIEW_MAX_CODEBLOCK_LINES || getInput('max_codeblock_lines');
@@ -165,11 +183,14 @@ export default process.env.NODE_ENV === "test"
       reviewScopes: ["security","performance","best-practices"],
       allowTitleUpdate: false,
       zaiBaseUrl: undefined,
+      kimiBaseUrl: undefined,
+      deepseekBaseUrl: undefined,
       contextEngineApiKey: undefined,
       contextEngineMcpUrl: 'https://dev.context-engine.ai/indexer/mcp',
       contextEngineCollection: undefined,
       contextEngineTools: [],
-      contextEngineMaxTools: 9,
+      contextEngineMaxTools: 10,
+      contextEngineMaxSteps: 8,
       loadInputs: () => undefined,
     }
   : configInstance!;

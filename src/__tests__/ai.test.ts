@@ -71,4 +71,90 @@ describe('ai.runPrompt', () => {
     expect(runInference).toHaveBeenCalledWith(expect.objectContaining({ temperature: 1 }));
   });
 
+  const isolateWithRecorder = async (llmModel: string) => {
+    const runInference = jest.fn().mockResolvedValue({ ok: 1 });
+    const constructors: any[] = [];
+    const { runPrompt } = await isolate(
+      { llmProvider: 'ai-sdk', llmModel },
+      {
+        ai: {
+          __esModule: true,
+          AISDKProvider: class {
+            constructor(public _create: any, public _name: string) {
+              constructors.push({ create: _create, name: _name });
+            }
+            runInference = runInference;
+          }
+        }
+      }
+    );
+    return { runPrompt, runInference, constructors };
+  };
+
+  test('infers Anthropic provider for unlisted claude models', async () => {
+    const { runPrompt, runInference, constructors } = await isolateWithRecorder('claude-sonnet-4-5');
+    await runPrompt({ prompt: 'p', systemPrompt: 's', schema: schema as any });
+    expect(constructors[0].name).toBe('claude-sonnet-4-5');
+    expect(runInference).toHaveBeenCalledWith(expect.objectContaining({ temperature: undefined }));
+  });
+
+  test('infers OpenAI provider with temperature 1 for unlisted gpt models', async () => {
+    const { runPrompt, runInference, constructors } = await isolateWithRecorder('gpt-5.2');
+    await runPrompt({ prompt: 'p', systemPrompt: 's', schema: schema as any });
+    expect(constructors[0].name).toBe('gpt-5.2');
+    expect(runInference).toHaveBeenCalledWith(expect.objectContaining({ temperature: 1 }));
+  });
+
+  test('infers Bedrock provider for unlisted inference profile ids', async () => {
+    const { runPrompt, constructors } = await isolateWithRecorder('eu.anthropic.claude-sonnet-4-5-20250929-v1:0');
+    await runPrompt({ prompt: 'p', systemPrompt: 's', schema: schema as any });
+    expect(constructors[0].name).toBe('eu.anthropic.claude-sonnet-4-5-20250929-v1:0');
+  });
+
+  test('infers Google provider for unlisted gemini models', async () => {
+    const { runPrompt, constructors } = await isolateWithRecorder('gemini-3.0-pro');
+    await runPrompt({ prompt: 'p', systemPrompt: 's', schema: schema as any });
+    expect(constructors[0].name).toBe('gemini-3.0-pro');
+  });
+
+  test('routes kimi-k2.7-code through the Kimi provider with temperature 1', async () => {
+    const { runPrompt, runInference, constructors } = await isolateWithRecorder('kimi-k2.7-code');
+    await runPrompt({ prompt: 'p', systemPrompt: 's', schema: schema as any });
+    expect(constructors[0].name).toBe('kimi-k2.7-code');
+    expect(runInference).toHaveBeenCalledWith(expect.objectContaining({ temperature: 1 }));
+  });
+
+  test('infers Kimi provider for unlisted kimi and moonshot models', async () => {
+    const { runPrompt, runInference, constructors } = await isolateWithRecorder('moonshot-v1-128k');
+    await runPrompt({ prompt: 'p', systemPrompt: 's', schema: schema as any });
+    expect(constructors[0].name).toBe('moonshot-v1-128k');
+    expect(runInference).toHaveBeenCalledWith(expect.objectContaining({ temperature: 1 }));
+  });
+
+  test('routes deepseek-chat through the DeepSeek provider', async () => {
+    const { runPrompt, constructors } = await isolateWithRecorder('deepseek-chat');
+    await runPrompt({ prompt: 'p', systemPrompt: 's', schema: schema as any });
+    expect(constructors[0].name).toBe('deepseek-chat');
+  });
+
+  test('infers DeepSeek provider for unlisted deepseek models', async () => {
+    const { runPrompt, constructors } = await isolateWithRecorder('deepseek-v4');
+    await runPrompt({ prompt: 'p', systemPrompt: 's', schema: schema as any });
+    expect(constructors[0].name).toBe('deepseek-v4');
+  });
+
+  test('does not misroute o-prefixed non-OpenAI model names', async () => {
+    const { runPrompt } = await isolateWithRecorder('oracle-1');
+    await expect(
+      runPrompt({ prompt: 'p', systemPrompt: 's', schema: schema as any })
+    ).rejects.toThrow(/Unknown LLM model/i);
+  });
+
+  test('infers OpenAI provider for bare o-series ids', async () => {
+    const { runPrompt, runInference, constructors } = await isolateWithRecorder('o5-mini');
+    await runPrompt({ prompt: 'p', systemPrompt: 's', schema: schema as any });
+    expect(constructors[0].name).toBe('o5-mini');
+    expect(runInference).toHaveBeenCalledWith(expect.objectContaining({ temperature: 1 }));
+  });
+
 });

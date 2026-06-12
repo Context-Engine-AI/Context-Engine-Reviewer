@@ -35,6 +35,59 @@ describe('prompts.ts core prompts', () => {
     expect(call.enableContextEngineTools).toBeUndefined();
   });
 
+  test('runSummaryPrompt normalizes GLM-style files map and bare type string', async () => {
+    mockRunPrompt.mockResolvedValueOnce({
+      title: 'T',
+      description: 'D',
+      type: 'Performance',
+      files: {
+        'scripts/a.py': 'Added a cache',
+        'scripts/b.py': { summary: 'Refactored reads', title: 'Reads' },
+      },
+    });
+    jest.doMock('../ai', () => ({ __esModule: true, runPrompt: mockRunPrompt }));
+    jest.doMock('../config', () => ({
+      __esModule: true,
+      default: { maxReviewChars: 50 },
+    }));
+
+    const { runSummaryPrompt } = await import('../prompts');
+
+    const summary = await runSummaryPrompt({
+      prTitle: 'T', prDescription: 'D', commitMessages: [], files: [] as any,
+    });
+
+    expect(summary.type).toEqual(['Performance']);
+    expect(summary.files).toEqual([
+      { filename: 'scripts/a.py', summary: 'Added a cache', title: 'scripts/a.py' },
+      { filename: 'scripts/b.py', summary: 'Refactored reads', title: 'Reads' },
+    ]);
+  });
+
+  test('runSummaryPrompt recovers file summaries from alternate keys', async () => {
+    mockRunPrompt.mockResolvedValueOnce({
+      title: 'T',
+      description: 'D',
+      type: [],
+      affected_file_summaries: { 'scripts/a.py': 'Added a cache' },
+    });
+    jest.doMock('../ai', () => ({ __esModule: true, runPrompt: mockRunPrompt }));
+    jest.doMock('../config', () => ({
+      __esModule: true,
+      default: { maxReviewChars: 50 },
+    }));
+
+    const { runSummaryPrompt } = await import('../prompts');
+
+    const summary = await runSummaryPrompt({
+      prTitle: 'T', prDescription: 'D', commitMessages: [], files: [] as any,
+    });
+
+    expect(summary.files).toEqual([
+      { filename: 'scripts/a.py', summary: 'Added a cache', title: 'scripts/a.py' },
+    ]);
+  });
+
   test('runReviewPrompt embeds diffs and respects styleGuideRules when empty', async () => {
     jest.doMock('../ai', () => ({ __esModule: true, runPrompt: mockRunPrompt }));
     jest.doMock('../config', () => ({ __esModule: true, default: { styleGuideRules: '' } }));

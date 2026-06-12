@@ -11,7 +11,7 @@ This repository starts from the reviewer shell we proved in the DOJ reviewer: Gi
 - Tracks reviewed commits so follow-up runs can review incrementally.
 - Batches large diffs by context size instead of sending one oversized prompt.
 - Supports local dry runs against real GitHub PRs.
-- Supports OpenAI, Anthropic, Google, Z.AI, and AWS Bedrock through AI SDK adapters.
+- Supports OpenAI, Anthropic, Google, Z.AI, Kimi (Moonshot AI), DeepSeek, and AWS Bedrock through AI SDK adapters.
 - Keeps the existing `custom_mode` review behavior for deeper senior-engineer analysis.
 
 ## Status
@@ -71,6 +71,12 @@ Common optional settings:
 - `LLM_PROVIDER`: `ai-sdk`. Defaults to `ai-sdk`.
 - `ZAI_API_KEY`: Z.AI API key for `glm-*` models. Used when `LLM_API_KEY` is not set.
 - `ZAI_BASE_URL`: Z.AI OpenAI-compatible base URL. Defaults to `https://api.z.ai/api/coding/paas/v4/`.
+- `KIMI_API_KEY`: Kimi (Moonshot AI) platform API key for `kimi-*` and `moonshot-*` models. Used when `LLM_API_KEY` is not set.
+- `KIMI_BASE_URL`: Kimi OpenAI-compatible base URL. Defaults to `https://api.moonshot.ai/v1`.
+- `DEEPSEEK_API_KEY`: DeepSeek API key for `deepseek-*` models. Used when `LLM_API_KEY` is not set.
+- `DEEPSEEK_BASE_URL`: DeepSeek OpenAI-compatible base URL. Defaults to `https://api.deepseek.com/v1`.
+- `CONTEXT_ENGINE_TIMEOUT_MS`: per-request Context Engine MCP timeout in milliseconds. Defaults to `30000`.
+- `LLM_MAX_OUTPUT_TOKENS`: maximum output tokens per LLM call. Defaults to `16384`. Set explicitly because some OpenAI-compatible endpoints default very low and truncate structured review output.
 - `CUSTOM_MODE`: `on`, `off`, or `auto`. Defaults to `auto`.
 - `REVIEW_SCOPES`: comma-separated labels used by review configuration.
 - `REVIEW_MAX_COMMENTS`: maximum inline comments per run. Defaults to `40`.
@@ -83,8 +89,9 @@ Common optional settings:
 - `CONTEXT_ENGINE_API_KEY` or `CTXCE_API_KEY`: optional Context Engine API key. When set, review prompts can call Context Engine MCP tools for repository context.
 - `CONTEXT_ENGINE_MCP_URL` or `CTXCE_INDEXER_URL`: optional Context Engine MCP indexer URL. Defaults to `https://dev.context-engine.ai/indexer/mcp`.
 - `CONTEXT_ENGINE_COLLECTION`: optional collection name to scope MCP searches.
-- `CONTEXT_ENGINE_TOOLS`: optional comma-separated MCP tool allow-list. Defaults to `repo_search,batch_search,symbol_graph,batch_symbol_graph,graph_query,batch_graph_query,search_tests_for,search_config_for,search_commits_for`.
-- `CONTEXT_ENGINE_MAX_TOOLS`: maximum MCP tools exposed to reviewer LLMs. Defaults to `9`.
+- `CONTEXT_ENGINE_TOOLS`: optional comma-separated MCP tool allow-list. Defaults to `repo_search,batch_search,symbol_graph,batch_symbol_graph,graph_query,batch_graph_query,search_tests_for,search_config_for,search_commits_for,context_answer`.
+- `CONTEXT_ENGINE_MAX_TOOLS`: maximum MCP tools exposed to reviewer LLMs. Defaults to `10`.
+- `CONTEXT_ENGINE_MAX_STEPS`: maximum LLM steps (tool roundtrips plus the final structured output) per review batch when Context Engine tools are enabled. Defaults to `8`.
 
 The action input names mirror the environment variables where applicable, for example `custom_mode`, `llm_model`, `llm_provider`, `github_api_url`, and `github_server_url`.
 
@@ -93,6 +100,14 @@ The action input names mirror the environment variables where applicable, for ex
 By default, the reviewer works from PR diffs only. This is the free/default mode and does not make Context Engine network calls.
 
 Customers who want repository-aware review can opt in by providing a Context Engine API key. When enabled, the reviewer exposes a small allow-list of explicit Context Engine MCP tools to the LLM during review inference. If MCP setup or tool discovery fails, the reviewer logs a warning and falls back to the normal diff-only path for that run.
+
+Reliability behavior when Context Engine is enabled:
+
+- Each MCP request has a 30 second timeout (configurable via `CONTEXT_ENGINE_TIMEOUT_MS`), so a hung endpoint cannot stall the review job.
+- A failed tool call returns a structured error to the LLM instead of aborting the review batch.
+- Tool discovery runs once per review run and is reused across review batches.
+- After each review batch, the reviewer logs a one-line tool usage summary (tool names, call counts, average latency) so you can see whether Context Engine context contributed to the review.
+- If an allow-listed tool is not exposed by the MCP server, the reviewer logs a warning naming the missing tools.
 
 The default SaaS MCP endpoint is:
 
@@ -133,7 +148,8 @@ Optional action inputs:
 
 - `context_engine_mcp_url`: defaults to `https://dev.context-engine.ai/indexer/mcp`.
 - `context_engine_tools`: comma-separated MCP tool allow-list.
-- `context_engine_max_tools`: maximum number of MCP tools exposed to the reviewer LLM. Defaults to `9`.
+- `context_engine_max_tools`: maximum number of MCP tools exposed to the reviewer LLM. Defaults to `10`.
+- `context_engine_max_steps`: maximum LLM steps per review batch when Context Engine tools are enabled. Defaults to `8`.
 
 #### Default tool allow-list
 
@@ -148,8 +164,9 @@ The default allow-list intentionally exposes direct code/navigation tools only:
 - `search_tests_for`
 - `search_config_for`
 - `search_commits_for`
+- `context_answer`
 
-The unified `search` router is excluded by default because it can be noisy for an autonomous reviewer. Memory tools are also excluded by default and the reviewer does not connect to the memory MCP endpoint. `search_commits_for` is included so the reviewer can inspect relevant commit history or historically co-changing files when that materially improves review quality.
+The unified `search` router is excluded by default because it can be noisy for an autonomous reviewer. Memory tools are also excluded by default and the reviewer does not connect to the memory MCP endpoint. `search_commits_for` is included so the reviewer can inspect relevant commit history or historically co-changing files when that materially improves review quality. `context_answer` is included so the reviewer can ask conceptual questions about how the codebase works (for example, how auth is enforced) when raw search results are not enough.
 
 You can override the allow-list if needed:
 
@@ -183,10 +200,13 @@ Optional dry-run flags:
 - `--context-engine-mcp-url` / `--ce-url`
 - `--context-engine-tools` / `--ce-tools`
 - `--context-engine-max-tools` / `--ce-max-tools`
+- `--context-engine-max-steps` / `--ce-max-steps`
 
 ## Providers
 
 The reviewer uses the AI SDK provider surface. Direct API providers use `LLM_API_KEY`, Z.AI can use `ZAI_API_KEY`, and AWS Bedrock can use AWS credentials instead.
+
+Model names not in the built-in catalog are routed by prefix, so newly released models work without a reviewer update: `claude-*` to Anthropic, `gpt-*` and `o<N>*` to OpenAI, `gemini-*` to Google, `glm-*` to Z.AI, `kimi-*`/`moonshot-*` to Kimi (Moonshot AI), `deepseek-*` to DeepSeek, and Bedrock model ids (for example `us.anthropic....`) to AWS Bedrock.
 
 OpenAI:
 
@@ -198,13 +218,13 @@ env:
   LLM_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 ```
 
-Anthropic:
+Anthropic (Claude 4.x and Fable 5 model ids are supported, for example `claude-sonnet-4-6`, `claude-haiku-4-5-20251001`, `claude-opus-4-8`, or `claude-fable-5`):
 
 ```yaml
 env:
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   LLM_PROVIDER: ai-sdk
-  LLM_MODEL: claude-3-5-sonnet-20241022
+  LLM_MODEL: claude-sonnet-4-6
   LLM_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
@@ -229,6 +249,30 @@ env:
 ```
 
 `ZAI_BASE_URL` defaults to the Z.AI coding endpoint, `https://api.z.ai/api/coding/paas/v4/`. Override it only when you intentionally want a different Z.AI OpenAI-compatible endpoint.
+
+Kimi (Moonshot AI):
+
+```yaml
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  LLM_PROVIDER: ai-sdk
+  LLM_MODEL: kimi-k2.7-code
+  KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+```
+
+`KIMI_BASE_URL` defaults to the Moonshot platform endpoint, `https://api.moonshot.ai/v1`. Use a platform API key; Kimi For Coding plan keys are not supported because Moonshot restricts that endpoint to an allow-list of coding agents and rejects third-party clients such as this reviewer. Both `kimi-*` and `moonshot-*` model ids route through this provider.
+
+DeepSeek:
+
+```yaml
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  LLM_PROVIDER: ai-sdk
+  LLM_MODEL: deepseek-chat
+  DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+```
+
+`DEEPSEEK_BASE_URL` defaults to `https://api.deepseek.com/v1`. The catalog lists the `deepseek-chat` and `deepseek-reasoner` aliases, which always point at the latest model generation, plus the current `deepseek-v4-flash` and `deepseek-v4-pro` ids; other explicit `deepseek-*` ids also route through this provider.
 
 AWS Bedrock:
 

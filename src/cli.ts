@@ -38,6 +38,7 @@ export function applyContextEngineCliOptions(args: Record<string, any>) {
   setEnvIfProvided('CONTEXT_ENGINE_COLLECTION', args.contextEngineCollection);
   setEnvIfProvided('CONTEXT_ENGINE_TOOLS', args.contextEngineTools);
   setEnvIfProvided('CONTEXT_ENGINE_MAX_TOOLS', args.contextEngineMaxTools);
+  setEnvIfProvided('CONTEXT_ENGINE_MAX_STEPS', args.contextEngineMaxSteps);
 }
 
 function resolveRepository(): { owner: string; repo: string } {
@@ -142,6 +143,7 @@ export function parseArgs(argv: string[]) {
     else if (a === '--context-engine-collection' || a === '--ce-collection') { args.contextEngineCollection = argv[++i]; }
     else if (a === '--context-engine-tools' || a === '--ce-tools') { args.contextEngineTools = argv[++i]; }
     else if (a === '--context-engine-max-tools' || a === '--ce-max-tools') { args.contextEngineMaxTools = parseInt(argv[++i] || '0', 10); }
+    else if (a === '--context-engine-max-steps' || a === '--ce-max-steps') { args.contextEngineMaxSteps = parseInt(argv[++i] || '0', 10); }
     else if (a === '--out' || a === '-out') { const next = argv[i+1]; if (next && !next.startsWith('-')) { args.out = next; i++; } else { args.out = true; } }
     else args._.push(a);
   }

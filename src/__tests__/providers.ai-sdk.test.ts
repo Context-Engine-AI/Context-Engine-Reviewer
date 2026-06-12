@@ -20,9 +20,11 @@ jest.mock('ai', () => ({
 
 const mockCreateContextEngineTools = jest.fn().mockResolvedValue(undefined);
 const mockAppendContextEngineToolInstructions = jest.fn((system?: string) => `${system || ''}\nCE tools enabled`);
+const mockLogContextEngineToolUsage = jest.fn();
 jest.mock('../context_engine_mcp', () => ({
   createContextEngineTools: (...args: any[]) => (mockCreateContextEngineTools as any)(...args),
   appendContextEngineToolInstructions: (...args: any[]) => (mockAppendContextEngineToolInstructions as any)(...args),
+  logContextEngineToolUsage: (...args: any[]) => (mockLogContextEngineToolUsage as any)(...args),
 }));
 
 describe('AISDKProvider', () => {
@@ -81,6 +83,8 @@ describe('AISDKProvider', () => {
     expect(args.temperature).toBe(0); // defaulted
     expect(args.model).toEqual({ provider: 'ai-sdk', modelName: 'gpt-4o-mini' });
     expect(typeof args.experimental_repairText).toBe('function');
+    expect(args.providerOptions).toEqual({ openai: { strictJsonSchema: false } });
+    expect(args.maxOutputTokens).toBe(16384);
     await expect(args.experimental_repairText({ text: '```json\n{"ok":true}\n```', error: new Error('parse') })).resolves.toBe('{"ok":true}');
 
     // returns the parsed object
@@ -163,7 +167,79 @@ describe('AISDKProvider', () => {
     expect(args.prompt).toBe('Review this diff');
     expect(args.system).toContain('CE tools enabled');
     expect(args.tools).toBe(tools);
-    expect(args.stopWhen).toEqual({ kind: 'step-count', count: 4 });
+    expect(args.stopWhen).toEqual({ kind: 'step-count', count: 8 });
     expect(args.output).toEqual({ kind: 'object-output', schema });
+    expect(args.providerOptions).toEqual({ openai: { strictJsonSchema: false } });
+    expect(mockLogContextEngineToolUsage).toHaveBeenCalledTimes(1);
+  });
+
+  test('falls back to diff-only structured output when tool-loop parsing fails', async () => {
+    const calls: any[] = [];
+    const createAiFunc = makeCreateAiFunc({ calls });
+    mockCreateContextEngineTools.mockResolvedValue({ search: { type: 'function' } });
+    const parseError = new Error('could not parse');
+    (parseError as any).name = 'AI_NoObjectGeneratedError';
+    mockGenerateText.mockRejectedValue(parseError);
+    mockGenerateObject.mockResolvedValue({ object: { ok: true }, usage: {} });
+
+    const provider = new AISDKProvider(createAiFunc as any, 'gpt-4o-mini');
+
+    const result = await provider.runInference({
+      prompt: 'Review this diff',
+      temperature: undefined as any,
+      system: 'sys',
+      schema: { type: 'object' } as any,
+      enableContextEngineTools: true,
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(mockGenerateText).toHaveBeenCalledTimes(1);
+    expect(mockGenerateObject).toHaveBeenCalledTimes(1);
+    expect(mockLogContextEngineToolUsage).toHaveBeenCalledTimes(1);
+  });
+
+  test('repairs structurally broken JSON via jsonrepair', async () => {
+    const calls: any[] = [];
+    const createAiFunc = makeCreateAiFunc({ calls });
+    mockGenerateObject.mockResolvedValue({ object: { ok: true }, usage: {} });
+
+    const provider = new AISDKProvider(createAiFunc as any, 'gpt-4o-mini');
+    await provider.runInference({
+      prompt: 'P',
+      temperature: undefined as any,
+      system: 'S',
+      schema: { type: 'object' } as any,
+    });
+
+    const args = mockGenerateObject.mock.calls[0][0];
+    const repaired = await args.experimental_repairText({ text: '{"a": [1 2]}', error: new Error('parse') });
+    expect(JSON.parse(repaired)).toEqual({ a: [1, 2] });
+  });
+
+  test('honors configured Context Engine max steps and logs usage on failure', async () => {
+    const calls: any[] = [];
+    const createAiFunc = makeCreateAiFunc({ calls });
+    mockCreateContextEngineTools.mockResolvedValue({ search: { type: 'function' } });
+    mockGenerateText.mockRejectedValue(new Error('inference failed'));
+    (config as any).contextEngineMaxSteps = 12;
+
+    const provider = new AISDKProvider(createAiFunc as any, 'gpt-4o-mini');
+
+    try {
+      await expect(
+        provider.runInference({
+          prompt: 'Review this diff',
+          temperature: undefined as any,
+          system: 'sys',
+          schema: { type: 'object' } as any,
+          enableContextEngineTools: true,
+        })
+      ).rejects.toThrow('inference failed');
+
+      expect(mockStepCountIs).toHaveBeenCalledWith(12);
+      expect(mockLogContextEngineToolUsage).toHaveBeenCalledTimes(1);
+    } finally {
+      (config as any).contextEngineMaxSteps = 8;
+    }
   });
 });

@@ -26,7 +26,15 @@ const DEFAULT_TOOL_NAMES = [
   "search_tests_for",
   "search_config_for",
   "search_commits_for",
+  "context_answer",
 ];
+
+// Per-request cap so a hung MCP endpoint cannot stall the review job.
+// SaaS MCP searches routinely take 10s+, so the default must stay well above that.
+const MCP_REQUEST_TIMEOUT_MS = (() => {
+  const raw = Number(process.env.CONTEXT_ENGINE_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : 30_000;
+})();
 
 const CODE_SEARCH_TOOLS = new Set([
   "search",
@@ -75,6 +83,55 @@ async function parseMcpResponse(response: Response): Promise<any> {
   return parsed?.result ?? parsed;
 }
 
+function compactToolResult(result: unknown): unknown {
+  if (!result || typeof result !== "object" || Array.isArray(result)) return result;
+  const payload = result as JsonObject;
+  const content = Array.isArray(payload.content) ? payload.content : undefined;
+  const text = content
+    ?.filter((part): part is { type: string; text: string } =>
+      Boolean(part) && typeof part === "object" &&
+      (part as JsonObject).type === "text" && typeof (part as JsonObject).text === "string")
+    .map((part) => part.text)
+    .join("\n")
+    .trim();
+  if (payload.isError) {
+    return { error: sanitizeErrorMessage(text || "Context Engine tool call failed") };
+  }
+  if (text) return text;
+  if (payload.structuredContent !== undefined) return payload.structuredContent;
+  return result;
+}
+
+type ToolUsageStat = { calls: number; errors: number; totalMs: number };
+
+const toolUsage = new Map<string, ToolUsageStat>();
+
+function recordToolUsage(name: string, elapsedMs: number, failed: boolean): void {
+  const stat = toolUsage.get(name) || { calls: 0, errors: 0, totalMs: 0 };
+  toolUsage.set(name, {
+    calls: stat.calls + 1,
+    errors: stat.errors + (failed ? 1 : 0),
+    totalMs: stat.totalMs + elapsedMs,
+  });
+}
+
+export function logContextEngineToolUsage(): void {
+  if (!isContextEngineMcpEnabled()) return;
+  if (!toolUsage.size) {
+    info("[context-engine] no Context Engine tool calls in this review batch");
+    return;
+  }
+  const summary = Array.from(toolUsage.entries())
+    .map(([name, stat]) => {
+      const avgMs = Math.round(stat.totalMs / Math.max(1, stat.calls));
+      const errors = stat.errors ? `, ${stat.errors} failed` : "";
+      return `${name} x${stat.calls} (avg ${avgMs}ms${errors})`;
+    })
+    .join("; ");
+  info(`[context-engine] tool usage: ${summary}`);
+  toolUsage.clear();
+}
+
 function withReviewerDefaults(name: string, args: unknown, collection?: string): JsonObject {
   const next: JsonObject = args && typeof args === "object" && !Array.isArray(args)
     ? { ...(args as JsonObject) }
@@ -115,6 +172,12 @@ export class ContextEngineMcpClient {
       method: "POST",
       headers: this.headers(),
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(MCP_REQUEST_TIMEOUT_MS),
+    }).catch((error: unknown) => {
+      if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+        throw new Error(`Context Engine MCP request timed out after ${MCP_REQUEST_TIMEOUT_MS}ms`);
+      }
+      throw error;
     });
     const session = response.headers.get("mcp-session-id");
     if (session) this.sessionId = session;
@@ -144,10 +207,13 @@ export class ContextEngineMcpClient {
 
   async callTool(name: string, args: unknown): Promise<unknown> {
     await this.initialize();
-    return this.request("tools/call", {
+    const result = await this.request("tools/call", {
       name,
       arguments: withReviewerDefaults(name, args, this.options.collection),
     });
+    // MCP results carry the same data as content text and structuredContent;
+    // return one compact representation so tool output is not paid for twice.
+    return compactToolResult(result);
   }
 }
 
@@ -165,9 +231,28 @@ export function isContextEngineMcpEnabled(): boolean {
   return Boolean((config as any).contextEngineApiKey && (config as any).contextEngineMcpUrl);
 }
 
+let cachedTools: Promise<Record<string, any> | undefined> | undefined;
+
+export function resetContextEngineToolsCache(): void {
+  cachedTools = undefined;
+  toolUsage.clear();
+}
+
 export async function createContextEngineTools(): Promise<Record<string, any> | undefined> {
   if (!isContextEngineMcpEnabled()) return undefined;
+  // Tool discovery is cached for the run: review batches reuse the same client
+  // and tool definitions, and a failed setup keeps the run on the diff-only path.
+  // The cached promise must never reject, or every later batch would throw too.
+  if (!cachedTools) {
+    cachedTools = buildContextEngineTools().catch((error: unknown) => {
+      warning(`Context Engine MCP tools disabled: ${error instanceof Error ? error.message : String(error)}`);
+      return undefined;
+    });
+  }
+  return cachedTools;
+}
 
+async function buildContextEngineTools(): Promise<Record<string, any> | undefined> {
   const client = new ContextEngineMcpClient({
     url: (config as any).contextEngineMcpUrl,
     apiKey: (config as any).contextEngineApiKey,
@@ -177,7 +262,8 @@ export async function createContextEngineTools(): Promise<Record<string, any> | 
   const maxTools = Math.max(1, Number((config as any).contextEngineMaxTools || DEFAULT_TOOL_NAMES.length));
 
   try {
-    const remoteTools = (await client.listTools())
+    const allRemoteTools = await client.listTools();
+    const remoteTools = allRemoteTools
       .filter((remoteTool) => allowed.has(remoteTool.name))
       .slice(0, maxTools);
     const tools: Record<string, any> = {};
@@ -185,8 +271,30 @@ export async function createContextEngineTools(): Promise<Record<string, any> | 
       tools[remoteTool.name] = tool({
         description: remoteTool.description || `Call Context Engine MCP tool ${remoteTool.name}`,
         inputSchema: jsonSchema(safeInputSchema(remoteTool.inputSchema)),
-        execute: async (input: unknown) => client.callTool(remoteTool.name, input),
+        execute: async (input: unknown) => {
+          const startedAt = Date.now();
+          try {
+            const result = await client.callTool(remoteTool.name, input);
+            const failed = Boolean(result && typeof result === "object" && (result as JsonObject).error);
+            recordToolUsage(remoteTool.name, Date.now() - startedAt, failed);
+            return result;
+          } catch (error: unknown) {
+            recordToolUsage(remoteTool.name, Date.now() - startedAt, true);
+            const message = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
+            warning(`[context-engine] ${remoteTool.name} failed: ${message}`);
+            // Return a structured error instead of throwing so one failed tool
+            // call cannot abort the whole review batch.
+            return { error: message };
+          }
+        },
       });
+    }
+    // Compare against the full remote list, not the capped selection, so tools
+    // dropped only by the max-tools cap are not misreported as missing.
+    const remoteNames = new Set(allRemoteTools.map((remoteTool) => remoteTool.name));
+    const missing = Array.from(allowed).filter((name) => !remoteNames.has(name));
+    if (missing.length) {
+      warning(`[context-engine] allow-listed tools not exposed by the MCP server: ${missing.join(", ")}`);
     }
     if (process.env.DEBUG) info(`[context-engine] enabled MCP reviewer tools: ${Object.keys(tools).join(", ")}`);
     return Object.keys(tools).length ? tools : undefined;
@@ -201,7 +309,7 @@ export function appendContextEngineToolInstructions(system?: string): string | u
   const instructions = `
 
 <CONTEXT_ENGINE_TOOLS>
-Context Engine MCP tools may be available. Use explicit repository tools such as repo_search, batch_search, symbol_graph, batch_symbol_graph, graph_query, batch_graph_query, search_tests_for, search_config_for, and search_commits_for when the PR diff is insufficient and repository context would materially improve review accuracy.
+Context Engine MCP tools may be available. Use explicit repository tools such as repo_search, batch_search, symbol_graph, batch_symbol_graph, graph_query, batch_graph_query, search_tests_for, search_config_for, and search_commits_for when the PR diff is insufficient and repository context would materially improve review accuracy. Use context_answer for conceptual questions about how the codebase works (for example "how is auth enforced in this service?") when raw search results are not enough.
 Only use returned repository context to assess code introduced in this PR. Do not invent issues from unrelated unchanged code.
 </CONTEXT_ENGINE_TOOLS>`;
   return `${system || ""}${instructions}`;

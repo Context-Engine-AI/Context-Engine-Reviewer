@@ -57,6 +57,46 @@ describe('Config', () => {
     expect(config.llmApiKey).toBe('test-zai-key');
   });
 
+  test('uses KIMI_API_KEY for Kimi models', () => {
+    process.env.GITHUB_TOKEN = 'test-token';
+    process.env.LLM_API_KEY = '';
+    process.env.KIMI_API_KEY = 'test-kimi-key';
+    process.env.LLM_MODEL = 'kimi-k2.7-code';
+
+    const config = new Config();
+
+    expect(config.llmApiKey).toBe('test-kimi-key');
+  });
+
+  test('uses DEEPSEEK_API_KEY for DeepSeek models', () => {
+    process.env.GITHUB_TOKEN = 'test-token';
+    process.env.LLM_API_KEY = '';
+    process.env.DEEPSEEK_API_KEY = 'test-deepseek-key';
+    process.env.LLM_MODEL = 'deepseek-chat';
+
+    const config = new Config();
+
+    expect(config.llmApiKey).toBe('test-deepseek-key');
+  });
+
+  test('throws DeepSeek-specific error when no key is set for deepseek models', () => {
+    process.env.GITHUB_TOKEN = 'test-token';
+    process.env.LLM_API_KEY = '';
+    delete process.env.DEEPSEEK_API_KEY;
+    process.env.LLM_MODEL = 'deepseek-chat';
+
+    expect(() => new Config()).toThrow('LLM_API_KEY or DEEPSEEK_API_KEY is not set');
+  });
+
+  test('throws Kimi-specific error when no key is set for kimi models', () => {
+    process.env.GITHUB_TOKEN = 'test-token';
+    process.env.LLM_API_KEY = '';
+    delete process.env.KIMI_API_KEY;
+    process.env.LLM_MODEL = 'kimi-k2.7-code';
+
+    expect(() => new Config()).toThrow('LLM_API_KEY or KIMI_API_KEY is not set');
+  });
+
   test('throws error when LLM_MODEL is not set', () => {
     process.env.GITHUB_TOKEN = 'test-token';
     process.env.LLM_API_KEY = 'test-api-key';
@@ -144,6 +184,31 @@ describe('Config', () => {
     expect(config.contextEngineCollection).toBe('repo-collection');
     expect(config.contextEngineTools).toEqual(['repo_search', 'batch_search']);
     expect(config.contextEngineMaxTools).toBe(2);
+  });
+
+  test('parses REVIEW_MAX_COMMENTS as base-10', () => {
+    process.env.GITHUB_TOKEN = 'test-token';
+    process.env.LLM_API_KEY = 'test-api-key';
+    process.env.LLM_MODEL = 'test-model';
+    process.env.REVIEW_MAX_COMMENTS = '40';
+
+    const config = new Config();
+
+    expect(config.maxComments).toBe(40);
+  });
+
+  test('defaults Context Engine max steps to 8 and accepts override', () => {
+    process.env.GITHUB_TOKEN = 'test-token';
+    process.env.LLM_API_KEY = 'test-api-key';
+    process.env.LLM_MODEL = 'test-model';
+
+    expect(new Config().contextEngineMaxSteps).toBe(8);
+
+    process.env.CONTEXT_ENGINE_MAX_STEPS = '12';
+    expect(new Config().contextEngineMaxSteps).toBe(12);
+
+    process.env.CONTEXT_ENGINE_MAX_STEPS = '-3';
+    expect(new Config().contextEngineMaxSteps).toBe(8);
   });
 
   //   test('skips loading inputs when DEBUG is set', () => {

@@ -2,6 +2,7 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock";
+import { createDeepSeek as createDeepSeekProvider } from "@ai-sdk/deepseek";
 import { z } from "zod";
 import config from "./config";
 import { AISDKProvider } from "./providers/ai-sdk";
@@ -11,6 +12,11 @@ export enum AIProviderType {
 }
 
 const ZAI_CODING_BASE_URL = "https://api.z.ai/api/coding/paas/v4/";
+// Moonshot platform endpoint. The separate Kimi For Coding endpoint is not
+// supported: Moonshot restricts it to an allow-list of coding agents and
+// rejects third-party clients such as this reviewer.
+const KIMI_PLATFORM_BASE_URL = "https://api.moonshot.ai/v1";
+const DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1";
 
 function createZAI(options?: Record<string, unknown>) {
   const provider = createOpenAI({
@@ -19,6 +25,25 @@ function createZAI(options?: Record<string, unknown>) {
     baseURL: config.zaiBaseUrl || ZAI_CODING_BASE_URL,
   });
   return (modelId: string) => provider.chat(modelId);
+}
+
+function createKimi(options?: Record<string, unknown>) {
+  const provider = createOpenAI({
+    ...options,
+    name: "kimi",
+    baseURL: config.kimiBaseUrl || KIMI_PLATFORM_BASE_URL,
+  });
+  return (modelId: string) => provider.chat(modelId);
+}
+
+// Uses the official DeepSeek provider: DeepSeek's API rejects the json_schema
+// response_format that the generic OpenAI chat adapter sends for structured output.
+function createDeepSeek(options?: Record<string, unknown>) {
+  const provider = createDeepSeekProvider({
+    ...options,
+    baseURL: config.deepseekBaseUrl || DEEPSEEK_BASE_URL,
+  });
+  return (modelId: string) => provider(modelId);
 }
 
 const LLM_MODELS: Record<AIProviderType, ModelConfig[]> = {
@@ -48,6 +73,38 @@ const LLM_MODELS: Record<AIProviderType, ModelConfig[]> = {
       name: "claude-opus-4-1-20250805",
       createAi: createAnthropic,
     },
+    {
+      name: "claude-sonnet-4-5-20250929",
+      createAi: createAnthropic,
+    },
+    {
+      name: "claude-haiku-4-5-20251001",
+      createAi: createAnthropic,
+    },
+    {
+      name: "claude-opus-4-5-20251101",
+      createAi: createAnthropic,
+    },
+    {
+      name: "claude-sonnet-4-6",
+      createAi: createAnthropic,
+    },
+    {
+      name: "claude-opus-4-6",
+      createAi: createAnthropic,
+    },
+    {
+      name: "claude-opus-4-7",
+      createAi: createAnthropic,
+    },
+    {
+      name: "claude-opus-4-8",
+      createAi: createAnthropic,
+    },
+    {
+      name: "claude-fable-5",
+      createAi: createAnthropic,
+    },
     // OpenAI - using responses API (default in AI SDK v5)
     {
       name: "gpt-5",
@@ -61,6 +118,36 @@ const LLM_MODELS: Record<AIProviderType, ModelConfig[]> = {
     },
     {
       name: "gpt-5-nano",
+      createAi: createOpenAI,
+      temperature: 1,
+    },
+    {
+      name: "gpt-5.1",
+      createAi: createOpenAI,
+      temperature: 1,
+    },
+    {
+      name: "gpt-5.2",
+      createAi: createOpenAI,
+      temperature: 1,
+    },
+    {
+      name: "gpt-5.4",
+      createAi: createOpenAI,
+      temperature: 1,
+    },
+    {
+      name: "gpt-5.4-mini",
+      createAi: createOpenAI,
+      temperature: 1,
+    },
+    {
+      name: "gpt-5.4-nano",
+      createAi: createOpenAI,
+      temperature: 1,
+    },
+    {
+      name: "gpt-5.5",
       createAi: createOpenAI,
       temperature: 1,
     },
@@ -99,6 +186,37 @@ const LLM_MODELS: Record<AIProviderType, ModelConfig[]> = {
       name: "glm-5",
       createAi: createZAI,
       temperature: 1,
+    },
+    // Kimi (Moonshot AI) platform endpoint, OpenAI-compatible.
+    // Kimi k2.x models reject any temperature other than 1.
+    {
+      name: "kimi-k2.7-code",
+      createAi: createKimi,
+      temperature: 1,
+    },
+    {
+      name: "kimi-k2.6",
+      createAi: createKimi,
+      temperature: 1,
+    },
+    // DeepSeek platform endpoint, OpenAI-compatible. These aliases always
+    // point at the latest generation; older versioned ids are intentionally
+    // not listed.
+    {
+      name: "deepseek-chat",
+      createAi: createDeepSeek,
+    },
+    {
+      name: "deepseek-reasoner",
+      createAi: createDeepSeek,
+    },
+    {
+      name: "deepseek-v4-flash",
+      createAi: createDeepSeek,
+    },
+    {
+      name: "deepseek-v4-pro",
+      createAi: createDeepSeek,
     },
     // Google stable models https://ai.google.dev/gemini-api/docs/models/gemini
     {
@@ -190,6 +308,46 @@ const LLM_MODELS: Record<AIProviderType, ModelConfig[]> = {
       createAi: createAmazonBedrock,
     },
     {
+      name: "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+      createAi: createAmazonBedrock,
+    },
+    {
+      name: "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+      createAi: createAmazonBedrock,
+    },
+    {
+      name: "us.anthropic.claude-opus-4-5-20251101-v1:0",
+      createAi: createAmazonBedrock,
+    },
+    {
+      name: "us.anthropic.claude-sonnet-4-6",
+      createAi: createAmazonBedrock,
+    },
+    {
+      name: "global.anthropic.claude-sonnet-4-6",
+      createAi: createAmazonBedrock,
+    },
+    {
+      name: "us.anthropic.claude-opus-4-6-v1",
+      createAi: createAmazonBedrock,
+    },
+    {
+      name: "us.anthropic.claude-opus-4-7",
+      createAi: createAmazonBedrock,
+    },
+    {
+      name: "us.anthropic.claude-opus-4-8",
+      createAi: createAmazonBedrock,
+    },
+    {
+      name: "us.anthropic.claude-fable-5",
+      createAi: createAmazonBedrock,
+    },
+    {
+      name: "global.anthropic.claude-fable-5",
+      createAi: createAmazonBedrock,
+    },
+    {
       name: "us.anthropic.claude-opus-4-20250514-v1:0",
       createAi: createAmazonBedrock,
     },
@@ -208,6 +366,37 @@ const LLM_MODELS: Record<AIProviderType, ModelConfig[]> = {
     },
   ],
 };
+
+// Fallback for model names not in the catalog above: infer the provider from
+// the model name so newly released models work without a code change.
+// Bedrock ids must be checked first; they embed vendor segments like "anthropic.".
+function inferModelConfig(modelName: string): ModelConfig | undefined {
+  if (/(^|\.)(anthropic|qwen|meta|amazon)\./.test(modelName)) {
+    return { name: modelName, createAi: createAmazonBedrock };
+  }
+  if (/^claude-/i.test(modelName)) {
+    return { name: modelName, createAi: createAnthropic };
+  }
+  // Newer OpenAI reasoning models reject temperature 0; 1 is accepted everywhere.
+  // o-series must be a bare "o<digits>" segment so names like "oracle-1" don't match.
+  if (/^(gpt-|o[1-9]\d*(-|$))/i.test(modelName)) {
+    return { name: modelName, createAi: createOpenAI, temperature: 1 };
+  }
+  if (/^gemini-/i.test(modelName)) {
+    return { name: modelName, createAi: createGoogleGenerativeAI };
+  }
+  if (/^glm-/i.test(modelName)) {
+    return { name: modelName, createAi: createZAI, temperature: 1 };
+  }
+  // Kimi k2.x models reject any temperature other than 1.
+  if (/^(kimi-|moonshot-)/i.test(modelName)) {
+    return { name: modelName, createAi: createKimi, temperature: 1 };
+  }
+  if (/^deepseek-/i.test(modelName)) {
+    return { name: modelName, createAi: createDeepSeek };
+  }
+  return undefined;
+}
 
 export type InferenceConfig = {
   prompt: string;
@@ -270,12 +459,16 @@ export async function runPrompt({
   }
   const providerType = config.llmProvider as AIProviderType;
   const providerModels = LLM_MODELS[providerType];
-  const modelConfig = providerModels.find((m) => m.name === config.llmModel);
+  const modelConfig =
+    providerModels.find((m) => m.name === config.llmModel) ||
+    inferModelConfig(config.llmModel || "");
   if (!modelConfig) {
     throw new Error(
       `Unknown LLM model: ${config.llmModel}. For provider ${
         config.llmProvider
-      }, supported models are: ${providerModels.map((m) => m.name).join(", ")}`
+      }, use a model name starting with claude-, gpt-, o<N>, gemini-, or glm-, a Bedrock model id (e.g. us.anthropic....), or one of: ${providerModels
+        .map((m) => m.name)
+        .join(", ")}`
     );
   }
 

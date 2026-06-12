@@ -1,10 +1,34 @@
 import { AIProvider, InferenceConfig } from "@/ai";
+import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock";
 import config from "../config";
-import { info } from "@actions/core";
+import { info, warning } from "@actions/core";
 import { generateObject, generateText, Output, stepCountIs } from "ai";
-import { appendContextEngineToolInstructions, createContextEngineTools } from "../context_engine_mcp";
+import { jsonrepair } from "jsonrepair";
+import { appendContextEngineToolInstructions, createContextEngineTools, logContextEngineToolUsage } from "../context_engine_mcp";
 
-function repairJsonText(text: string): string | null {
+const DEFAULT_CONTEXT_ENGINE_MAX_STEPS = 8;
+
+// Some OpenAI-compatible endpoints default max_tokens very low (Moonshot: 1024),
+// which truncates structured review output mid-JSON. Always set it explicitly.
+const DEFAULT_MAX_OUTPUT_TOKENS = 16_384;
+
+function maxOutputTokens(): number {
+  const raw = Number(process.env.LLM_MAX_OUTPUT_TOKENS);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : DEFAULT_MAX_OUTPUT_TOKENS;
+}
+
+// The review schemas use unions and optional fields that OpenAI's strict
+// json_schema mode rejects (newer gpt-5.x models enforce this). Output is
+// validated with zod after generation, so strict mode adds nothing here.
+// Other providers ignore the openai namespace.
+const PROVIDER_OPTIONS = { openai: { strictJsonSchema: false } };
+
+function contextEngineMaxSteps(): number {
+  const raw = Number((config as any).contextEngineMaxSteps);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : DEFAULT_CONTEXT_ENGINE_MAX_STEPS;
+}
+
+function extractJsonCandidate(text: string): string | null {
   const trimmed = text.trim();
   const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
   if (fenced?.[1]) return fenced[1].trim();
@@ -22,6 +46,23 @@ function repairJsonText(text: string): string | null {
   }
 
   return null;
+}
+
+function repairJsonText(text: string): string | null {
+  const candidate = extractJsonCandidate(text) ?? text.trim();
+  if (!candidate) return null;
+  try {
+    JSON.parse(candidate);
+    return candidate;
+  } catch {
+    // Fix structural damage (missing commas, unescaped quotes, truncation)
+    // that simple fence/brace extraction cannot.
+    try {
+      return jsonrepair(candidate);
+    } catch {
+      return null;
+    }
+  }
 }
 
 export class AISDKProvider implements AIProvider {
@@ -46,8 +87,14 @@ export class AISDKProvider implements AIProvider {
                            this.modelName.includes('meta.') ||
                            this.modelName.includes('amazon.');
 
+    // Compare by reference first: the bundled dist/ is minified, which mangles
+    // function names and would make the .name fallback fail in production.
+    const isBedrockFactory =
+      this.createAiFunc === createAmazonBedrock ||
+      this.createAiFunc?.name === 'createAmazonBedrock';
+
     let llm;
-    if (isBedrockModel && this.createAiFunc.name === 'createAmazonBedrock') {
+    if (isBedrockModel && isBedrockFactory) {
       // AWS Bedrock uses different authentication
       const bedrockConfig: any = {
         region: process.env.AWS_REGION || 'us-east-1',
@@ -75,21 +122,35 @@ export class AISDKProvider implements AIProvider {
 
     const contextEngineTools = enableContextEngineTools ? await createContextEngineTools() : undefined;
     if (contextEngineTools) {
-      const { output, totalUsage } = await generateText({
-        model: llm(this.modelName),
-        prompt,
-        temperature: temperature || 0,
-        system: appendContextEngineToolInstructions(system),
-        tools: contextEngineTools,
-        stopWhen: stepCountIs(4),
-        output: Output.object({ schema }),
-      });
+      try {
+        const { output, totalUsage } = await generateText({
+          model: llm(this.modelName),
+          prompt,
+          temperature: temperature || 0,
+          system: appendContextEngineToolInstructions(system),
+          tools: contextEngineTools,
+          stopWhen: stepCountIs(contextEngineMaxSteps()),
+          output: Output.object({ schema }),
+          providerOptions: PROVIDER_OPTIONS,
+          maxOutputTokens: maxOutputTokens(),
+        });
 
-      if (process.env.DEBUG) {
-        info(`usage: \n${JSON.stringify(totalUsage, null, 2)}`);
+        if (process.env.DEBUG) {
+          info(`usage: \n${JSON.stringify(totalUsage, null, 2)}`);
+        }
+
+        return output;
+      } catch (error: unknown) {
+        // Some models cannot reliably emit structured output in tool-use mode.
+        // Fall through to the plain structured path (with JSON repair) so a
+        // parse failure degrades to a diff-only review instead of aborting.
+        if ((error as { name?: string })?.name !== "AI_NoObjectGeneratedError") {
+          throw error;
+        }
+        warning("[context-engine] structured output failed with tools enabled; retrying without Context Engine tools");
+      } finally {
+        logContextEngineToolUsage();
       }
-
-      return output;
     }
 
     // Use structured output for all supported models (including Bedrock Qwen)
@@ -100,6 +161,8 @@ export class AISDKProvider implements AIProvider {
       system,
       schema,
       experimental_repairText: async ({ text }) => repairJsonText(text),
+      providerOptions: PROVIDER_OPTIONS,
+      maxOutputTokens: maxOutputTokens(),
     });
 
     if (process.env.DEBUG) {

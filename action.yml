@@ -38,6 +38,14 @@ inputs:
     required: false
     description: 'Z.AI OpenAI-compatible base URL for glm-* models'
     default: 'https://api.z.ai/api/coding/paas/v4/'
+  kimi_base_url:
+    required: false
+    description: 'Kimi (Moonshot AI) OpenAI-compatible base URL for kimi-* and moonshot-* models'
+    default: 'https://api.moonshot.ai/v1'
+  deepseek_base_url:
+    required: false
+    description: 'DeepSeek OpenAI-compatible base URL for deepseek-* models'
+    default: 'https://api.deepseek.com/v1'
   context_engine_api_key:
     required: false
     description: 'Optional Context Engine API key. When set, reviewer LLMs can call Context Engine MCP tools for repository context.'
@@ -53,11 +61,15 @@ inputs:
   context_engine_tools:
     required: false
     description: 'Optional comma-separated Context Engine MCP tools exposed to the reviewer LLM.'
-    default: 'repo_search,batch_search,symbol_graph,batch_symbol_graph,graph_query,batch_graph_query,search_tests_for,search_config_for,search_commits_for'
+    default: 'repo_search,batch_search,symbol_graph,batch_symbol_graph,graph_query,batch_graph_query,search_tests_for,search_config_for,search_commits_for,context_answer'
   context_engine_max_tools:
     required: false
     description: 'Maximum number of Context Engine MCP tools exposed to the reviewer LLM.'
-    default: '9'
+    default: '10'
+  context_engine_max_steps:
+    required: false
+    description: 'Maximum LLM steps (tool roundtrips plus final output) per review batch when Context Engine tools are enabled.'
+    default: '8'
 
   review_scopes:
     required: false
