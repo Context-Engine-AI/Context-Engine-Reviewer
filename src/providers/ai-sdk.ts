@@ -20,8 +20,28 @@ function maxOutputTokens(): number {
 // The review schemas use unions and optional fields that OpenAI's strict
 // json_schema mode rejects (newer gpt-5.x models enforce this). Output is
 // validated with zod after generation, so strict mode adds nothing here.
-// Other providers ignore the openai namespace.
-const PROVIDER_OPTIONS = { openai: { strictJsonSchema: false } };
+// Providers ignore namespaces that are not theirs, so unused entries are inert.
+// Reasoning effort mapping: openai/zai/kimi use reasoningEffort, anthropic uses
+// effort. Bedrock and Google use numeric thinking budgets and are not covered.
+function buildProviderOptions(modelName: string): Record<string, Record<string, string | boolean>> {
+  const configured = String((config as any).llmReasoningEffort || "").toLowerCase() || undefined;
+  // Claude Fable only supports medium effort; force it regardless of configuration.
+  const isFable = /claude-fable/i.test(modelName);
+  const anthropicEffort = isFable ? "medium" : configured;
+
+  const options: Record<string, Record<string, string | boolean>> = {
+    openai: {
+      strictJsonSchema: false,
+      ...(configured ? { reasoningEffort: configured } : {}),
+    },
+  };
+  if (anthropicEffort) options.anthropic = { effort: anthropicEffort };
+  if (configured) {
+    options.zai = { reasoningEffort: configured };
+    options.kimi = { reasoningEffort: configured };
+  }
+  return options;
+}
 
 function contextEngineMaxSteps(): number {
   const raw = Number((config as any).contextEngineMaxSteps);
@@ -131,7 +151,7 @@ export class AISDKProvider implements AIProvider {
           tools: contextEngineTools,
           stopWhen: stepCountIs(contextEngineMaxSteps()),
           output: Output.object({ schema }),
-          providerOptions: PROVIDER_OPTIONS,
+          providerOptions: buildProviderOptions(this.modelName),
           maxOutputTokens: maxOutputTokens(),
         });
 
@@ -161,7 +181,7 @@ export class AISDKProvider implements AIProvider {
       system,
       schema,
       experimental_repairText: async ({ text }) => repairJsonText(text),
-      providerOptions: PROVIDER_OPTIONS,
+      providerOptions: buildProviderOptions(this.modelName),
       maxOutputTokens: maxOutputTokens(),
     });
 

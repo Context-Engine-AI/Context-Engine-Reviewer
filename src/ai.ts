@@ -3,6 +3,7 @@ import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock";
 import { createDeepSeek as createDeepSeekProvider } from "@ai-sdk/deepseek";
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { z } from "zod";
 import config from "./config";
 import { AISDKProvider } from "./providers/ai-sdk";
@@ -18,22 +19,26 @@ const ZAI_CODING_BASE_URL = "https://api.z.ai/api/coding/paas/v4/";
 const KIMI_PLATFORM_BASE_URL = "https://api.moonshot.ai/v1";
 const DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1";
 
+// Uses the openai-compatible adapter: Z.AI accepts but ignores the json_schema
+// response_format, so the schema must be injected into the prompt instead.
 function createZAI(options?: Record<string, unknown>) {
-  const provider = createOpenAI({
+  const provider = createOpenAICompatible({
     ...options,
     name: "zai",
     baseURL: config.zaiBaseUrl || ZAI_CODING_BASE_URL,
-  });
-  return (modelId: string) => provider.chat(modelId);
+  } as any);
+  return (modelId: string) => provider(modelId);
 }
 
+// Uses the openai-compatible adapter: Moonshot accepts but does not enforce the
+// json_schema response_format, so the schema must be injected into the prompt.
 function createKimi(options?: Record<string, unknown>) {
-  const provider = createOpenAI({
+  const provider = createOpenAICompatible({
     ...options,
     name: "kimi",
     baseURL: config.kimiBaseUrl || KIMI_PLATFORM_BASE_URL,
-  });
-  return (modelId: string) => provider.chat(modelId);
+  } as any);
+  return (modelId: string) => provider(modelId);
 }
 
 // Uses the official DeepSeek provider: DeepSeek's API rejects the json_schema

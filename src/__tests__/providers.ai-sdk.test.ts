@@ -198,6 +198,71 @@ describe('AISDKProvider', () => {
     expect(mockLogContextEngineToolUsage).toHaveBeenCalledTimes(1);
   });
 
+  test('maps configured reasoning effort to provider options', async () => {
+    const calls: any[] = [];
+    const createAiFunc = makeCreateAiFunc({ calls });
+    mockGenerateObject.mockResolvedValue({ object: { ok: true }, usage: {} });
+    (config as any).llmReasoningEffort = 'high';
+
+    try {
+      const provider = new AISDKProvider(createAiFunc as any, 'gpt-5.4-mini');
+      await provider.runInference({
+        prompt: 'P',
+        temperature: undefined as any,
+        system: 'S',
+        schema: { type: 'object' } as any,
+      });
+
+      const args = mockGenerateObject.mock.calls[0][0];
+      expect(args.providerOptions.openai).toEqual({ strictJsonSchema: false, reasoningEffort: 'high' });
+      expect(args.providerOptions.anthropic).toEqual({ effort: 'high' });
+      expect(args.providerOptions.zai).toEqual({ reasoningEffort: 'high' });
+      expect(args.providerOptions.kimi).toEqual({ reasoningEffort: 'high' });
+    } finally {
+      (config as any).llmReasoningEffort = undefined;
+    }
+  });
+
+  test('pins Claude Fable to medium effort regardless of configuration', async () => {
+    const calls: any[] = [];
+    const createAiFunc = makeCreateAiFunc({ calls });
+    mockGenerateObject.mockResolvedValue({ object: { ok: true }, usage: {} });
+    (config as any).llmReasoningEffort = 'high';
+
+    try {
+      const provider = new AISDKProvider(createAiFunc as any, 'claude-fable-5');
+      await provider.runInference({
+        prompt: 'P',
+        temperature: undefined as any,
+        system: 'S',
+        schema: { type: 'object' } as any,
+      });
+
+      const args = mockGenerateObject.mock.calls[0][0];
+      expect(args.providerOptions.anthropic).toEqual({ effort: 'medium' });
+    } finally {
+      (config as any).llmReasoningEffort = undefined;
+    }
+  });
+
+  test('pins Claude Fable to medium effort even with no effort configured', async () => {
+    const calls: any[] = [];
+    const createAiFunc = makeCreateAiFunc({ calls });
+    mockGenerateObject.mockResolvedValue({ object: { ok: true }, usage: {} });
+
+    const provider = new AISDKProvider(createAiFunc as any, 'claude-fable-5');
+    await provider.runInference({
+      prompt: 'P',
+      temperature: undefined as any,
+      system: 'S',
+      schema: { type: 'object' } as any,
+    });
+
+    const args = mockGenerateObject.mock.calls[0][0];
+    expect(args.providerOptions.anthropic).toEqual({ effort: 'medium' });
+    expect(args.providerOptions.zai).toBeUndefined();
+  });
+
   test('repairs structurally broken JSON via jsonrepair', async () => {
     const calls: any[] = [];
     const createAiFunc = makeCreateAiFunc({ calls });

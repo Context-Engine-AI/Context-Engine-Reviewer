@@ -34,6 +34,10 @@ inputs:
     required: false
     description: 'Override LLM provider (e.g., ai-sdk)'
     default: ''
+  llm_reasoning_effort:
+    required: false
+    description: 'Reasoning effort for models that support it (e.g., low | medium | high). Claude Fable is always pinned to medium.'
+    default: ''
   zai_base_url:
     required: false
     description: 'Z.AI OpenAI-compatible base URL for glm-* models'

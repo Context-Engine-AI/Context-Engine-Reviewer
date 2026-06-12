@@ -77,6 +77,7 @@ Common optional settings:
 - `DEEPSEEK_BASE_URL`: DeepSeek OpenAI-compatible base URL. Defaults to `https://api.deepseek.com/v1`.
 - `CONTEXT_ENGINE_TIMEOUT_MS`: per-request Context Engine MCP timeout in milliseconds. Defaults to `30000`.
 - `LLM_MAX_OUTPUT_TOKENS`: maximum output tokens per LLM call. Defaults to `16384`. Set explicitly because some OpenAI-compatible endpoints default very low and truncate structured review output.
+- `LLM_REASONING_EFFORT`: optional reasoning effort for models that support it, for example `low`, `medium`, or `high`. Maps to `reasoningEffort` for OpenAI, Z.AI, and Kimi models and to `effort` for Anthropic models. Claude Fable models only support medium effort, so the reviewer always pins them to `medium` regardless of this setting. Bedrock and Google models use numeric thinking budgets and are not affected. Only set values the chosen model supports.
 - `CUSTOM_MODE`: `on`, `off`, or `auto`. Defaults to `auto`.
 - `REVIEW_SCOPES`: comma-separated labels used by review configuration.
 - `REVIEW_MAX_COMMENTS`: maximum inline comments per run. Defaults to `40`.

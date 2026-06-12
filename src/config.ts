@@ -18,6 +18,7 @@ export class Config {
   public zaiBaseUrl: string | undefined;
   public kimiBaseUrl: string | undefined;
   public deepseekBaseUrl: string | undefined;
+  public llmReasoningEffort: string | undefined; // e.g. low | medium | high; provider support varies
   public contextEngineApiKey: string | undefined;
   public contextEngineMcpUrl: string | undefined;
   public contextEngineCollection: string | undefined;
@@ -73,6 +74,8 @@ export class Config {
     this.zaiBaseUrl = process.env.ZAI_BASE_URL || getInput('zai_base_url') || undefined;
     this.kimiBaseUrl = process.env.KIMI_BASE_URL || getInput('kimi_base_url') || undefined;
     this.deepseekBaseUrl = process.env.DEEPSEEK_BASE_URL || getInput('deepseek_base_url') || undefined;
+    const effortRaw = (process.env.LLM_REASONING_EFFORT || getInput('llm_reasoning_effort') || '').trim().toLowerCase();
+    this.llmReasoningEffort = effortRaw || undefined;
 
     this.contextEngineApiKey =
       process.env.CONTEXT_ENGINE_API_KEY ||
@@ -185,6 +188,7 @@ export default process.env.NODE_ENV === "test"
       zaiBaseUrl: undefined,
       kimiBaseUrl: undefined,
       deepseekBaseUrl: undefined,
+      llmReasoningEffort: undefined,
       contextEngineApiKey: undefined,
       contextEngineMcpUrl: 'https://dev.context-engine.ai/indexer/mcp',
       contextEngineCollection: undefined,
